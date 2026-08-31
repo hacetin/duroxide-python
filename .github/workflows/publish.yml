@@ -95,38 +95,6 @@ jobs:
           name: wheels-windows-${{ matrix.target }}
           path: dist/*.whl
 
-  validate-wheels:
-    name: Validate ABI3 wheel tags
-    needs: [macos, linux, windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: wheels
-      - name: Require cp39-abi3 wheels
-        shell: bash
-        run: |
-          wheel_count=0
-          for wheel in wheels/*.whl; do
-            if [[ ! -e "$wheel" ]]; then
-              continue
-            fi
-            wheel_count=$((wheel_count + 1))
-            case "$(basename "$wheel")" in
-              *-cp39-abi3-*.whl) ;;
-              *)
-                echo "::error file=$wheel::Expected a cp39-abi3 wheel"
-                exit 1
-                ;;
-            esac
-          done
-          if [[ "$wheel_count" -eq 0 ]]; then
-            echo "::error::No wheels were downloaded"
-            exit 1
-          fi
-
   # ── Source distribution ─────────────────────────────────────
   sdist:
     runs-on: ubuntu-latest
@@ -145,11 +113,21 @@ jobs:
   # ── Pre-publish smoke: install wheel into fresh venv on real OSes ──
   smoke-local:
     name: Smoke (local) ${{ matrix.os }} py${{ matrix.python }}
-    needs: [validate-wheels]
+    needs: [macos, linux, windows]
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-14, macos-13, windows-latest]
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: ubuntu-24.04-arm
+            shell: bash
+          - os: macos-14        # arm64
+            shell: bash
+          - os: macos-13        # x64
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
         python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -165,15 +143,22 @@ jobs:
           path: wheels
       - name: List wheels
         shell: bash
-        run: ls -lh wheels/
+        run: |
+          ls -lh wheels/
+          for wheel in wheels/*.whl; do
+            [[ "$wheel" == *-cp39-abi3-*.whl ]] || {
+              echo "::error file=$wheel::Expected a cp39-abi3 wheel"
+              exit 1
+            }
+          done
       - name: Run smoke (local wheel)
-        if: runner.os != 'Windows'
+        if: matrix.shell == 'bash'
         env:
           WHEEL_DIR:    ${{ github.workspace }}/wheels
           SMOKE_SCRIPT: ${{ github.workspace }}/ci/smoke/smoke.py
         run: bash ci/smoke/run-local.sh
       - name: Run smoke (local wheel, Windows)
-        if: runner.os == 'Windows'
+        if: matrix.shell == 'pwsh'
         shell: pwsh
         env:
           WHEEL_DIR:    ${{ github.workspace }}/wheels
@@ -209,10 +194,22 @@ jobs:
     name: Smoke (registry) ${{ matrix.os }} py${{ matrix.python }}
     if: github.event_name == 'release'
     needs: [publish]
+    env:
+      PIP_ONLY_BINARY: duroxide
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-14, macos-13, windows-latest]
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: ubuntu-24.04-arm
+            shell: bash
+          - os: macos-14
+            shell: bash
+          - os: macos-13
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
         python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -228,13 +225,13 @@ jobs:
           V="${V#v}"
           echo "version=$V" >> "$GITHUB_OUTPUT"
       - name: Run smoke (registry install)
-        if: runner.os != 'Windows'
+        if: matrix.shell == 'bash'
         env:
           DUROXIDE_VERSION: ${{ steps.ver.outputs.version }}
           SMOKE_SCRIPT:     ${{ github.workspace }}/ci/smoke/smoke.py
         run: bash ci/smoke/run-registry.sh
       - name: Run smoke (registry install, Windows)
-        if: runner.os == 'Windows'
+        if: matrix.shell == 'pwsh'
         shell: pwsh
         env:
           DUROXIDE_VERSION: ${{ steps.ver.outputs.version }}
