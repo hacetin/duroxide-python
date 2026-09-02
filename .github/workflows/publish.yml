@@ -114,6 +114,8 @@ jobs:
   smoke-local:
     name: Smoke (local) ${{ matrix.os }} py${{ matrix.python }}
     needs: [macos, linux, windows]
+    env:
+      PIP_ONLY_BINARY: duroxide
     strategy:
       fail-fast: false
       matrix:
@@ -145,7 +147,13 @@ jobs:
         shell: bash
         run: |
           ls -lh wheels/
-          for wheel in wheels/*.whl; do
+          shopt -s nullglob
+          wheels=(wheels/*.whl)
+          if (( ${#wheels[@]} == 0 )); then
+            echo "::error::No wheel artifacts found"
+            exit 1
+          fi
+          for wheel in "${wheels[@]}"; do
             [[ "$wheel" == *-cp39-abi3-*.whl ]] || {
               echo "::error file=$wheel::Expected a cp39-abi3 wheel"
               exit 1
